@@ -1,17 +1,16 @@
+mod batcher;
 mod config;
 mod crypto;
 mod internal;
 mod rpc;
-mod batcher;
 
-use std::sync::{Arc, Mutex};
 use crate::crypto::secp256k1::Secp256k1;
+use crate::rpc::SequencerServerImpl;
+use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
 use config::Config;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tonic::transport::Server;
-use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
-use crate::rpc::SequencerServerImpl;
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,22 +26,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_batch_size: config.max_batch_size,
         max_wait_time: config.max_wait_ms,
     };
-    let mut submit_batcher = batcher::batcher::BatcherEngine::new(submit_batcher_config, rx_submit, tx_submit_batches);
+    let mut submit_batcher =
+        batcher::batcher::BatcherEngine::new(submit_batcher_config, rx_submit, tx_submit_batches);
     tokio::spawn(async move { submit_batcher.run().await });
 
     let update_batcher_config = batcher::batcher::BatcherConfig {
         max_batch_size: config.max_batch_size,
         max_wait_time: config.max_wait_ms,
     };
-    let mut update_batcher = batcher::batcher::BatcherEngine::new(update_batcher_config, rx_update, tx_update_batches);
+    let mut update_batcher =
+        batcher::batcher::BatcherEngine::new(update_batcher_config, rx_update, tx_update_batches);
     tokio::spawn(async move { update_batcher.run().await });
 
-    // TODO: load private key bytes from a secrets store / env / config
-    let private_key_bytes: [u8; 32] = [0u8; 32]; // replace with real key bytes
-    let signer: Arc<Mutex<dyn crate::batcher::signer::DigitalSignatureService + Send>> =
-        Arc::new(Mutex::new(Secp256k1::new(&private_key_bytes).expect("Invalid private key")));
-        
-    let server = SequencerServerImpl::new(tx_submit, rx_submit_batches, tx_update, rx_update_batches, signer);
+    // Load private key from sequencer/.env (key: secpk, hex-encoded 32 bytes)
+    dotenvy::from_path("sequencer/.env").expect("Failed to load sequencer/.env");
+    let secpk_hex = std::env::var("secpk").expect("`secpk` not set in sequencer/.env");
+    let key_bytes: Vec<u8> = hex::decode(secpk_hex.trim())
+        .expect("`secpk` must be a valid hex string");
+    let private_key_bytes: [u8; 32] = key_bytes
+        .try_into()
+        .expect("`secpk` must be exactly 32 bytes (64 hex chars)");
+    let signer: Arc<Mutex<dyn crate::batcher::signer::DigitalSignatureService + Send>> = Arc::new(
+        Mutex::new(Secp256k1::new(&private_key_bytes).expect("Invalid secp256k1 private key")),
+    );
+
+    let server = SequencerServerImpl::new(
+        tx_submit,
+        rx_submit_batches,
+        tx_update,
+        rx_update_batches,
+        signer,
+    );
 
     let addr = config.rpc_address.parse()?;
     println!("Sequencer listening on {}", addr);
@@ -53,5 +67,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     Ok(())
-
 }

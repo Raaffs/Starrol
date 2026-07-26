@@ -3,16 +3,16 @@ name = "sequencer"
 version = "0.1.0"
 edition = "2024"
 
-
 [dependencies]
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "time", "sync"] }
 tonic = "0.12"
-prost = "0.12"
+prost = "0.13" # <-- Change 0.12 to 0.13
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rs_merkle = "1.5.0"
 k256 = { version = "0.13", features = ["ecdsa"] }
+dotenvy = "0.15"
+hex = "0.4"
 
 [build-dependencies]
 tonic-build = "0.12"
-
