@@ -2,11 +2,10 @@ mod config;
 mod crypto; 
 use config::Config;
 mod internal;
+mod rpc;
 mod batcher;
 use internal::models::models::RootPayload;
 use crypto::merkle::MerkleTree;
-use crypto::secp256k1::Secp256k1;
-
 fn main() {
     let config = Config::load().expect("Failed to load config");
     println!("max batch size {}", config.max_batch_size);

@@ -3,6 +3,7 @@ package sequencer;
 
 service RootAnchoring {
   rpc SubmitRoot (RootSubmission) returns (Response);
+  rpc UpdateRoot (RootUpdate) returns (Response);
 }
 
 message RootSubmission {
@@ -10,6 +11,14 @@ message RootSubmission {
   bytes signature = 2;
   bytes public_key = 3;  
 }
+
+message RootUpdate {
+  bytes old_certificate_root = 1;
+  bytes new_certificate_root = 2;
+  bytes signature = 3;
+  bytes public_key = 4;  
+}
+
 
 enum SequencerStatus {
   UNKNOWN = 0;
