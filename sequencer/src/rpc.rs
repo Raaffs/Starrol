@@ -147,8 +147,7 @@ impl RootAnchoring for SequencerServerImpl {
             }));
         }
 
-        let batch_result: Result<Result<u64, String>, oneshot::error::RecvError> = resp_rx.await;
-        match batch_result {
+        match resp_rx.await {
             Ok(Ok(sequence_number)) => Ok(Response::new(ProtoResponse {
                 status: SequencerStatus::Accepted.into(),
                 sequence_number,
