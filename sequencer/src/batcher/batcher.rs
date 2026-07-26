@@ -52,8 +52,11 @@ impl<T: Send + 'static> BatcherEngine<T> {
                         }
                     };
                 }
-
-                
+                _ = &mut sleeper, if !batch.is_empty() => {
+                    if self.flush(&mut batch).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     }
