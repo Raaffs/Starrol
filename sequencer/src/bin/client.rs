@@ -11,11 +11,15 @@ use sequencer::RootSubmission;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // 1. Load the private key from sequencer/.env
-    dotenvy::from_path("sequencer/.env").ok(); // fallback to standard env if not found
-    let secpk_hex = std::env::var("secpk").expect("`secpk` environment variable not set");
-    let key_bytes = hex::decode(secpk_hex.trim())?;
-    let signing_key = SigningKey::from_slice(&key_bytes)?;
+    // 1. Generate a random private key from /dev/urandom
+    use std::io::Read;
+    let mut key_bytes = [0u8; 32];
+    let signing_key = loop {
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut key_bytes)?;
+        if let Ok(key) = SigningKey::from_slice(&key_bytes) {
+            break key;
+        }
+    };
     
     // 2. Derive the verifying (public) key and serialize to SEC1 bytes (compressed)
     let verifying_key = VerifyingKey::from(&signing_key);

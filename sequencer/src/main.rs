@@ -3,7 +3,7 @@ mod config;
 mod crypto;
 mod internal;
 mod rpc;
-
+mod store;
 use crate::crypto::secp256k1::Secp256k1;
 use crate::rpc::SequencerServerImpl;
 use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
