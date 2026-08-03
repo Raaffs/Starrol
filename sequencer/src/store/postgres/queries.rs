@@ -21,6 +21,7 @@ impl Store for PostgresDB {
             r#"
             INSERT INTO roots (root, leaves)
             VALUES ($1, $2)
+            ON CONFLICT (root) DO NOTHING
             RETURNING sequence_number
             "#,
         )

@@ -28,9 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 3. Define a dummy certificate root hash (32 bytes)
     // E.g., SHA256 of some data, or all zeroes, or whatever we want. Let's make it a nice 32-byte hash.
     let mut certificate_root = [0u8; 32];
-    for i in 0..32 {
-        certificate_root[i] = (i + 1) as u8;
-    }
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut certificate_root)?;
 
     // 4. Sign the certificate root
     let sig: Signature = signing_key.sign_prehash(&certificate_root)?;

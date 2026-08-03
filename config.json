@@ -1,5 +1,5 @@
 {
     "max_batch_size": 16,
-    "max_wait_ms": 2000,
+    "max_wait_ms": 5000,
     "rpc_address": "0.0.0.0:50051"
 }
