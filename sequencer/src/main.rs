@@ -4,18 +4,18 @@ mod crypto;
 mod internal;
 mod rpc;
 mod store;
-use crate::crypto::secp256k1::Secp256k1;
-use crate::rpc::rpc::SequencerServerImpl;
-use crate::rpc::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
+
 use config::Config;
-use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
-use tonic::transport::Server;
+use crate::crypto::secp256k1::Secp256k1;
+use crate::rpc::SequencerServerImpl;
+// Import the generated gRPC server struct:
+use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::{Arc, Mutex};
 use store::postgres::PostgresDB;
 use store::Store;
-
-
+use tokio::sync::mpsc;
+use tonic::transport::Server;
 async fn init_store() -> Arc<dyn Store + Send + Sync> {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:root@localhost:5432/starrol".to_string());
