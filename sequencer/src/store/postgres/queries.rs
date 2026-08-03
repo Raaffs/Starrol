@@ -1,23 +1,18 @@
 use crate::store::Store;
+use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use std::error::Error;
+use super::PostgresDB;
 
-pub struct PostgresDB {
-    pool: PgPool,
-}
 
-impl PostgresDB {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
 
+#[async_trait]
 impl Store for PostgresDB {
     async fn insert(
         &self,
         root: [u8; 32],
         leaves: Vec<[u8; 32]>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<u64, Box<dyn Error + Send + Sync>> {
         let mut tx = self.pool.begin().await?;
 
         let leaves_bytes: Vec<Vec<u8>> = leaves.iter().map(|l| l.to_vec()).collect();
@@ -50,7 +45,9 @@ impl Store for PostgresDB {
         }
 
         tx.commit().await?;
-        Ok(())
+
+        // Return the sequence number
+        Ok(seq_num as u64)
     }
 
     async fn update_by_seq_number(

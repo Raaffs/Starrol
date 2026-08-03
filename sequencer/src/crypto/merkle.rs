@@ -1,8 +1,8 @@
 use rs_merkle::{MerkleProof, MerkleTree as RsMerkleTree, algorithms::Sha256};
 
 pub struct MerkleTree{
-    leaves : Vec<[u8;32]>,
-    tree   : RsMerkleTree<Sha256>,
+    pub leaves : Vec<[u8;32]>,
+    pub tree   : RsMerkleTree<Sha256>,
 }
 
 impl MerkleTree{

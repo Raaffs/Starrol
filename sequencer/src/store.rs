@@ -1,7 +1,10 @@
 pub mod postgres;
 use std::error::Error;
-pub trait Store {
-    async fn insert(&self, root: [u8; 32], leaves: Vec<[u8; 32]>) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+use tonic::async_trait;
+#[async_trait]
+pub trait Store: Send + Sync {
+    async fn insert(&self, root: [u8; 32], leaves: Vec<[u8; 32]>) -> Result<u64, Box<dyn Error + Send + Sync>>;
 
     async fn update_by_seq_number(
         &self,

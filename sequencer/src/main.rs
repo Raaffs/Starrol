@@ -5,16 +5,34 @@ mod internal;
 mod rpc;
 mod store;
 use crate::crypto::secp256k1::Secp256k1;
-use crate::rpc::SequencerServerImpl;
-use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
+use crate::rpc::rpc::SequencerServerImpl;
+use crate::rpc::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
 use config::Config;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tonic::transport::Server;
+use sqlx::postgres::PgPoolOptions;
+use store::postgres::PostgresDB;
+use store::Store;
+
+
+async fn init_store() -> Arc<dyn Store + Send + Sync> {
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:root@localhost:5432/starrol".to_string());
+    
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to Postgres");
+
+    Arc::new(PostgresDB::new(pool))
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load().expect("Failed to load config");
+    let store =  init_store().await;
 
     let (tx_submit, rx_submit) = mpsc::channel(1024);
     let (tx_submit_batches, rx_submit_batches) = mpsc::channel(64);
@@ -56,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tx_update,
         rx_update_batches,
         signer,
+        store
     );
 
     let addr = config.rpc_address.parse()?;
