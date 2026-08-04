@@ -20,21 +20,20 @@ pub trait Store: Send + Sync {
     async fn get_by_seq_numbers(&self, seq_numbers: Vec<u32>) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
 
     async fn get_latest_seq_number(&self) -> Result<u32, Box<dyn Error + Send + Sync>>;
+
+    async fn get_leaves_by_seq_number(
+        &self,
+        seq_number: u32,
+    ) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
+
+    async fn update_root_by_seq_number(
+        &self,
+        seq_number: u32,
+        new_root: [u8; 32],
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 pub trait DigitalSignatureService {
     fn sign(&self, msg_hash: &[u8; 32]) -> Result<Vec<u8>, Box<dyn Error>>;
     fn verify(&self, public_key_bytes: &[u8], msg_hash: &[u8; 32], sig: &[u8]) -> Result<bool, Box<dyn Error>>;
 }
-
-
-
-
-
-
-
-
-
-
-
-

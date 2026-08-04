@@ -15,8 +15,9 @@ message RootSubmission {
 message RootUpdate {
   bytes old_certificate_root = 1;
   bytes new_certificate_root = 2;
-  bytes signature = 3;
-  bytes public_key = 4;  
+  uint64 sequence_number = 3; 
+  bytes signature = 4;
+  bytes public_key = 5;  
 }
 
 

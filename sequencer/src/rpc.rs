@@ -3,7 +3,7 @@ pub mod worker;
 
 // Generate protobuf types ONCE
 pub mod sequencer {
-    tonic::include_proto!("sequencer");
+    include!("pb/sequencer.rs");
 }
 
 pub use sequencer::root_anchoring_server::RootAnchoringServer;
@@ -20,6 +20,7 @@ pub struct SubmissionPayload {
 pub struct UpdatePayload {
     pub old_root: Vec<u8>,
     pub new_root: Vec<u8>,
+    pub sequence_number: u64,
     pub signature: Vec<u8>,
     pub public_key: Vec<u8>,
 }

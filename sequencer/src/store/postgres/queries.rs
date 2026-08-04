@@ -147,7 +147,6 @@ impl Store for PostgresDB {
                 results.push(arr);
             }
         }
-
         Ok(results)
     }
 
@@ -190,5 +189,44 @@ impl Store for PostgresDB {
         .await?;
 
         Ok(row.0.unwrap_or(0) as u32)
+    }
+
+    async fn get_leaves_by_seq_number(
+        &self,
+        seq_number: u32,
+    ) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>> {
+        let row: (Vec<Vec<u8>>,) = sqlx::query_as(
+            r#"
+            SELECT leaves
+            FROM roots
+            WHERE sequence_number = $1
+            "#,
+        )
+        .bind(seq_number as i32)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let leaves = row.0.into_iter().filter_map(|b| b.try_into().ok()).collect();
+        Ok(leaves)
+    }
+
+    async fn update_root_by_seq_number(
+        &self,
+        seq_number: u32,
+        new_root: [u8; 32],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        sqlx::query(
+            r#"
+            UPDATE roots
+            SET root = $1
+            WHERE sequence_number = $2
+            "#,
+        )
+        .bind(new_root.to_vec())
+        .bind(seq_number as i32)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

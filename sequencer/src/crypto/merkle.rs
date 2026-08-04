@@ -126,7 +126,7 @@ impl MerkleTree {
     // new global merkle tree, as the credential of issuers might be in different trees
     // However, etherum smart contract maintains a list of roots [g1,g2,g3,g4,...,gn]
     // We cannot just send a single global root (well we can, but it'd require 
-    // merkle tree which defeats the point), we need to send the list of update roots
+    // rebuilding merkle tree which defeats the point), we need to send the list of updated roots
     // which is why, we're extracting the layer at which all roots will be at.    
     // since all the merkle trees will be idential in the shape
 

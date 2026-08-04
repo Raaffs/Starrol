@@ -7,7 +7,6 @@ use crate::rpc::sequencer::{
 };
 use tonic::{Request, Response, Status};
 
-
 #[tonic::async_trait]
 impl RootAnchoring for SequencerServerImpl {
     
@@ -103,6 +102,7 @@ async fn update_root(
             payload: UpdatePayload {
                 old_root: req.old_certificate_root,
                 new_root: req.new_certificate_root,
+                sequence_number: req.sequence_number,
                 signature: req.signature,
                 public_key: req.public_key,
             },
