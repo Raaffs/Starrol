@@ -121,6 +121,17 @@ impl MerkleTree {
         (current_nodes[0], new_nodes[0], height, proof, flags)
     }
 
+    // reason why we're extracting a target layer: 
+    // when we get a batch of updates from issuers, we're constructing a 
+    // new global merkle tree, as the credential of issuers might be in different trees
+    // However, etherum smart contract maintains a list of roots [g1,g2,g3,g4,...,gn]
+    // We cannot just send a single global root (well we can, but it'd require 
+    // merkle tree which defeats the point), we need to send the list of update roots
+    // which is why, we're extracting the layer at which all roots will be at.    
+    // since all the merkle trees will be idential in the shape
+
+    // now, if we ever allow each set to have different size of merkle trees, it will be a headache
+    // but we can pass an array of layers, maybe. 
     pub fn verify_multi_proof(
         expected_root: &[u8; 32],
         target_leaves: &[[u8; 32]],
