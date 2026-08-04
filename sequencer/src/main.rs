@@ -13,7 +13,7 @@ use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::{Arc, Mutex};
 use store::postgres::PostgresDB;
-use store::Store;
+use store::{Store,DigitalSignatureService};
 use tokio::sync::mpsc;
 use tonic::transport::Server;
 async fn init_store() -> Arc<dyn Store + Send + Sync> {
@@ -31,6 +31,9 @@ async fn init_store() -> Arc<dyn Store + Send + Sync> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing subscriber
+    tracing_subscriber::fmt::init();
+
     let config = Config::load().expect("Failed to load config");
     let store =  init_store().await;
 
@@ -64,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let private_key_bytes: [u8; 32] = key_bytes
         .try_into()
         .expect("`secpk` must be exactly 32 bytes (64 hex chars)");
-    let signer: Arc<Mutex<dyn crate::batcher::signer::DigitalSignatureService + Send>> = Arc::new(
+    let signer: Arc<Mutex<dyn DigitalSignatureService + Send + 'static>> = Arc::new(
         Mutex::new(Secp256k1::new(&private_key_bytes).expect("Invalid secp256k1 private key")),
     );
 

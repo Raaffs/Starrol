@@ -1,8 +1,7 @@
 use crate::rpc::{SequencerServerImpl,SubmissionBatchItem,SubmissionPayload,UpdateBatchItem,UpdatePayload};
 use std::sync::{Arc, Mutex};
-use crate::batcher::signer::DigitalSignatureService;
 use crate::crypto::merkle::MerkleTree;
-use crate::store::Store;
+use crate::store::{Store,DigitalSignatureService};
 use tokio::sync::{mpsc};
 
 pub mod sequencer {
@@ -21,35 +20,53 @@ impl SequencerServerImpl{
         let store_submit = Arc::clone(&store);
         tokio::spawn(async move{
             while let Some(batch_items) =  rx_submission_batches.recv().await {
+                
                 let payloads : Vec<SubmissionPayload> = batch_items
                 .iter()
                 .map(|item| item.payload.clone())
                 .collect();
-                
-                let Ok(merkle) = Self::process_submission_batch_merkle(&payloads) else {
-                    for item in batch_items {
-                        let _ = item.respond_to.send(Err("Invalid Merkle tree".into()));
+
+                let fail_batch = |err_msg: &str, items:Vec<SubmissionBatchItem>| {
+                    for item in items {
+                        let _ = item
+                        .respond_to
+                        .send(Err(err_msg.into()))
+                        .unwrap_or_else(|e | tracing::error!("error occurred while sending error message to clients: {:?}",e));
                     }
-                    continue;
                 };
                 
-                let Some(root) = merkle.get_root() else{
-                        for item in batch_items {
-                        let _ = item.respond_to.send(Err("failed to get merkle root tree".into()));
-                    }
-                    continue;
+                let merkle = match Self::process_submission_batch_merkle(&payloads) {
+                   Ok(m) => m,
+                   Err(e) => {
+                        tracing::error!("error occurred while processing batch: {:?}",e);
+                       fail_batch("Invalid Merkle tree", batch_items);
+                       continue;
+                   }
                 };
 
-                let Ok(seq_no) = store_submit.insert(root,merkle.leaves).await else{
-                        for item in batch_items {
-                            let _ = item.respond_to.send(Err("Invalid Merkle tree".into()));
-                        }
-                    continue;
+                let root = match merkle.get_root() {
+                    Some(r) => r,
+                    None => {
+                        tracing::error!("failed to get merkle root tree");
+                        fail_batch("failed to get merkle root tree", batch_items);
+                        continue;
+                    }
                 };
-                
-                
+            
+                let seq_no = match store_submit.insert(root, merkle.leaves).await {
+                    Ok(seq) => seq,
+                    Err(e) => {
+                        tracing::error!("error occurred while inserting into db: {:?}",e);
+                        fail_batch("error occurred while inserting into db", batch_items);
+                        continue;
+                    }
+                };                
+
                 for item in batch_items{
-                    let _ = item.respond_to.send(Ok(seq_no));
+                    let _ = item.
+                    respond_to.
+                    send(Ok(seq_no)).
+                    unwrap_or_else(|e| tracing::error!("failed to send success message to client: {:?}",e));
                 }
             }
         });
@@ -70,7 +87,7 @@ impl SequencerServerImpl{
                 }
             }
         });
-        Self { tx_submit: tx_submission, tx_upate: tx_update, digital_signer: signer, store}
+        Self { tx_submit: tx_submission, tx_upate: tx_update, digital_signer: signer}
     }
 
     fn process_submission_batch_merkle(
@@ -84,8 +101,7 @@ impl SequencerServerImpl{
                 .map_err(|_| "Root must be exactly 32 bytes")?;
             leaves.push(leaf);
         }
-
-
+        
         let merkle = MerkleTree::from_leaves(leaves);
 
         Ok(merkle)

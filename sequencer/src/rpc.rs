@@ -37,7 +37,6 @@ pub struct UpdateBatchItem {
 pub struct SequencerServerImpl {
     pub tx_submit: tokio::sync::mpsc::Sender<SubmissionBatchItem>,
     pub tx_upate: tokio::sync::mpsc::Sender<UpdateBatchItem>,
-    pub digital_signer: std::sync::Arc<std::sync::Mutex<dyn crate::batcher::signer::DigitalSignatureService + Send>>,
-    pub store: std::sync::Arc<dyn crate::store::Store + Send + Sync>,
+    pub digital_signer: std::sync::Arc<std::sync::Mutex<dyn crate::store::DigitalSignatureService + Send>>,
 }
 

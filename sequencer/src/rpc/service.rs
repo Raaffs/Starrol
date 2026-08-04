@@ -18,16 +18,20 @@ impl RootAnchoring for SequencerServerImpl {
         let req = request.into_inner();
         let root_hash: &[u8;32]= match req.certificate_root.as_slice().try_into(){
                 Ok(hash) => hash,
-                Err(_) =>  return Ok(Response::new(ProtoResponse{
-                    status: SequencerStatus::InvalidSignature.into(),
-                    sequence_number:0,
-                    error_details: "Invalid certificate root length (must be 32 bytes)".to_string(),
-                }))
+                Err(e) => {
+                    tracing::error!("Invalid certificate root length (must be 32 bytes): {:?}", e);
+                    return Ok(Response::new(ProtoResponse{
+                        status: SequencerStatus::InvalidSignature.into(),
+                        sequence_number:0,
+                        error_details: "Invalid certificate root length (must be 32 bytes)".to_string(),
+                    }));
+                }
         };  
 
         let is_valid = match self.digital_signer.lock().unwrap().verify(&req.public_key, root_hash, &req.signature) {
             Ok(valid) => valid,
             Err(e) => {
+                tracing::error!("Signer error during verification: {}", e);
                 return Ok(Response::new(ProtoResponse {
                     status: SequencerStatus::InternalError.into(),
                     sequence_number: 0,
@@ -36,6 +40,7 @@ impl RootAnchoring for SequencerServerImpl {
             }
         };
         if !is_valid {
+            tracing::error!("Invalid signature for certificate root submission");
             return Ok(Response::new(ProtoResponse {
                 status: SequencerStatus::InvalidSignature.into(),
                 sequence_number: 0,
@@ -54,6 +59,7 @@ impl RootAnchoring for SequencerServerImpl {
         };
 
         if self.tx_submit.send(item).await.is_err() {
+            tracing::error!("Submission channel closed");
             return Ok(Response::new(ProtoResponse {
                 status: SequencerStatus::InternalError.into(),
                 sequence_number: 0,
@@ -67,16 +73,22 @@ impl RootAnchoring for SequencerServerImpl {
                 sequence_number,
                 error_details: String::new(),
             })),
-            Ok(Err(db_err)) => Ok(Response::new(ProtoResponse {
-                status: SequencerStatus::InternalError.into(),
-                sequence_number: 0,
-                error_details: format!("DB Error: {}", db_err),
-            })),
-            Err(_) => Ok(Response::new(ProtoResponse {
-                status: SequencerStatus::InternalError.into(),
-                sequence_number: 0,
-                error_details: "Worker dropped response channel".to_string(),
-            })),
+            Ok(Err(db_err)) => {
+                tracing::error!("DB Error during root submission: {}", db_err);
+                Ok(Response::new(ProtoResponse {
+                    status: SequencerStatus::InternalError.into(),
+                    sequence_number: 0,
+                    error_details: format!("DB Error: {}", db_err),
+                }))
+            }
+            Err(e) => {
+                tracing::error!("Worker dropped response channel during root submission: {:?}", e);
+                Ok(Response::new(ProtoResponse {
+                    status: SequencerStatus::InternalError.into(),
+                    sequence_number: 0,
+                    error_details: "Worker dropped response channel".to_string(),
+                }))
+            }
         }
     }
 
@@ -98,6 +110,7 @@ async fn update_root(
         };
 
         if self.tx_upate.send(item).await.is_err() {
+            tracing::error!("Update channel closed");
             return Ok(Response::new(ProtoResponse {
                 status: SequencerStatus::InternalError.into(),
                 sequence_number: 0,
@@ -111,16 +124,22 @@ async fn update_root(
                 sequence_number,
                 error_details: String::new(),
             })),
-            Ok(Err(db_err)) => Ok(Response::new(ProtoResponse {
-                status: SequencerStatus::InternalError.into(),
-                sequence_number: 0,
-                error_details: format!("DB Error: {}", db_err),
-            })),
-            Err(_) => Ok(Response::new(ProtoResponse {
-                status: SequencerStatus::InternalError.into(),
-                sequence_number: 0,
-                error_details: "Worker dropped response channel".to_string(),
-            })),
+            Ok(Err(db_err)) => {
+                tracing::error!("DB Error during root update: {}", db_err);
+                Ok(Response::new(ProtoResponse {
+                    status: SequencerStatus::InternalError.into(),
+                    sequence_number: 0,
+                    error_details: format!("DB Error: {}", db_err),
+                }))
+            }
+            Err(e) => {
+                tracing::error!("Worker dropped response channel during root update: {:?}", e);
+                Ok(Response::new(ProtoResponse {
+                    status: SequencerStatus::InternalError.into(),
+                    sequence_number: 0,
+                    error_details: "Worker dropped response channel".to_string(),
+                }))
+            }
         }
     }
 }

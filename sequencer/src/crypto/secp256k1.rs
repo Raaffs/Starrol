@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use k256::{ecdsa::{Signature, SigningKey, VerifyingKey, signature::{hazmat::{PrehashSigner, PrehashVerifier}}}};
-use crate::batcher::signer::DigitalSignatureService;
+use crate::store::DigitalSignatureService;
 pub struct Secp256k1 {
     private_key: SigningKey,
 }
