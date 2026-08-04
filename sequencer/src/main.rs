@@ -15,7 +15,26 @@ use std::sync::{Arc, Mutex};
 use store::postgres::PostgresDB;
 use store::{Store,DigitalSignatureService};
 use tokio::sync::mpsc;
+use tracing::subscriber::set_global_default;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, fmt};
+use tracing_appender::non_blocking::WorkerGuard;
 use tonic::transport::Server;
+
+pub fn init_logging() -> WorkerGuard {
+    let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stdout());
+
+    tracing_subscriber::registry()
+        .with(
+            fmt::layer()
+                .json()
+                .flatten_event(true)
+                .with_writer(non_blocking),
+        )
+        .init();
+
+    guard 
+}
+
 async fn init_store() -> Arc<dyn Store + Send + Sync> {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:root@localhost:5432/starrol".to_string());

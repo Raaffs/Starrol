@@ -44,15 +44,8 @@ impl SequencerServerImpl{
                    }
                 };
 
-                let root = match merkle.get_root() {
-                    Some(r) => r,
-                    None => {
-                        tracing::error!("failed to get merkle root tree");
-                        fail_batch("failed to get merkle root tree", batch_items);
-                        continue;
-                    }
-                };
-            
+                let root =  merkle.root();
+
                 let seq_no = match store_submit.insert(root, merkle.leaves).await {
                     Ok(seq) => seq,
                     Err(e) => {
@@ -60,7 +53,7 @@ impl SequencerServerImpl{
                         fail_batch("error occurred while inserting into db", batch_items);
                         continue;
                     }
-                };                
+                };
 
                 for item in batch_items{
                     let _ = item.
@@ -102,7 +95,7 @@ impl SequencerServerImpl{
             leaves.push(leaf);
         }
         
-        let merkle = MerkleTree::from_leaves(leaves);
+        let merkle = MerkleTree::new(leaves);
 
         Ok(merkle)
     }

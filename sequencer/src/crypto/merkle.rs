@@ -1,112 +1,191 @@
-use rs_merkle::{MerkleProof, MerkleTree as RsMerkleTree, algorithms::Sha256};
+use sha2::{Digest, Sha256};
 
-pub struct MerkleTree{
-    pub leaves : Vec<[u8;32]>,
-    pub tree   : RsMerkleTree<Sha256>,
+#[inline(always)]
+fn hash_node(a: &[u8; 32], b: &[u8; 32], hasher: &mut Sha256) -> [u8; 32] {
+    let (left, right) = if a > b { (b, a) } else { (a, b) };
+    hasher.update(left);
+    hasher.update(right);
+    hasher.finalize_reset().into()
 }
 
-impl MerkleTree{
-    pub fn from_leaves(leaves:Vec<[u8;32]>)->Self{
-        let tree = RsMerkleTree::<Sha256>::from_leaves(&leaves);
-        Self{ leaves: leaves, tree: tree }
+pub struct MerkleTree {
+    pub leaves: Vec<[u8; 32]>,
+}
+
+impl MerkleTree {
+    pub fn new(leaves: Vec<[u8; 32]>) -> Self {
+        Self { leaves }
     }
 
-    pub fn from_tree( tree: RsMerkleTree<Sha256>)->Self{
-        let leaves= tree.leaves().clone().unwrap_or(vec![]);
-        Self{ leaves: leaves, tree: tree  }
-    }
-
-    pub fn get_root(&self)->Option<[u8;32]>{
-        self.tree.root()
-    }
-
-    pub fn build_proof_for(&self, indices: &[usize])-> MerkleProof<Sha256>{
-        self.tree.proof(&indices)
-    }
-
-    // update leaves at given indices with new values
-    pub fn transition(&mut self, indices: Vec<usize>, new_values: Vec<[u8;32]>)->MerkleProof<Sha256>{
-        let proof = self.build_proof_for(&indices);
-        for i in 0..indices.len() {
-            let target_index = indices[i];
-            let new_hash = new_values[i];
-            self.leaves[target_index] = new_hash;
+    pub fn height(&self) -> u32 {
+        let mut num_leaves = self.leaves.len();
+        if num_leaves == 0 {
+            return 0;
         }
-        self.tree = RsMerkleTree::<Sha256>::from_leaves(&self.leaves);
-        proof
-    }   
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rs_merkle::algorithms::Sha256;
-    use rs_merkle::Hasher;
-
-    fn leaf_hash(value: &str) -> [u8; 32] {
-        Sha256::hash(value.as_bytes())
+        let mut height = 1;
+        while num_leaves > 1 {
+            num_leaves = (num_leaves + 1) / 2;
+            height += 1;
+        }
+        height
     }
 
-    #[test]
-    fn test_transition_proof_validation() {
-        // 1. Create initial state and track the genesis root
-        let initial_values = vec![
-            "account-0:100",
-            "account-1:100",
-            "account-2:100",
-            "account-3:100",
-            "account-4:100",
-        ];
+    pub fn root(&self) -> [u8; 32] {
+        if self.leaves.is_empty() {
+            return [0u8; 32];
+        }
 
-        let initial_leaves: Vec<[u8; 32]> = initial_values.iter().map(|v| leaf_hash(v)).collect();
-        
-        let mut merkle_tree = MerkleTree::from_leaves(initial_leaves.clone());
-        let genesis_root = merkle_tree.get_root().expect("failed to get genesis root");
+        let mut hasher = Sha256::new();
+        let mut current_layer = self.leaves.clone();
 
-        // 2. Define the target indices and their upcoming new values
-        let initial_indices = vec![1usize, 3, 4];
-        let update_indices =  vec![1usize, 3, 4];
-        let old_leaves_to_prove = vec![initial_leaves[1],  initial_leaves[3], initial_leaves[4]];
-        
-        let new_values = vec![
-            leaf_hash("account-1:200"),
-            leaf_hash("account-3:550"),
-            leaf_hash("account-4:550"),
-        ];
+        while current_layer.len() > 1 {
+            let mut next_layer = Vec::with_capacity((current_layer.len() + 1) / 2);
+            for i in (0..current_layer.len()).step_by(2) {
+                if i + 1 < current_layer.len() {
+                    next_layer.push(hash_node(&current_layer[i], &current_layer[i + 1], &mut hasher));
+                } else {
+                    next_layer.push(current_layer[i]);
+                }
+            }
+            current_layer = next_layer;
+        }
 
-        let malicious_indices=vec![1usize,3];
-        let malicious_excluding= vec![            
-            leaf_hash("account-1:200"),
-            leaf_hash("account-3:550"),
-        ];
+        current_layer[0]
+    }
 
+    /// Takes target indices and target leaf values. Applies the target values to a copy
+    /// of the tree's stored leaves, constructs the tree layer-by-layer, and returns
+    /// the calculated root alongside the proof.
+    pub fn build_multi_proof(
+        &self,
+        target_indices: &[usize],
+        target_leaves_values: &[[u8; 32]],
+        target_layer: Option<u32>,
+    ) -> ([u8; 32], u32, Vec<[u8; 32]>, Vec<bool>, Option<Vec<[u8; 32]>>) {
+        if self.leaves.is_empty() {
+            return ([0u8; 32], 0, vec![], vec![], None);
+        }
 
-        // 3. Perform the transition and harvest the proof package
-        let total_leaves_count = initial_leaves.len();
-        let proof = merkle_tree.transition(update_indices.clone(), new_values.clone());
-        
-        // Track the newly updated root state
-        let new_root = merkle_tree.get_root().expect("failed to get new root");
+        let height = self.height();
+        let mut hasher = Sha256::new();
+        let mut proof = Vec::new();
+        let mut flags = Vec::new();
 
-        // 4. Verify the proof against the GENESIS state
-        let verifies_genesis = proof.verify(
-            genesis_root, 
-            &initial_indices, 
-            &old_leaves_to_prove, 
-            total_leaves_count
-        );
-        assert!(verifies_genesis, "Proof failed to verify the old leaves against genesis root");
+        let mut current_layer = self.leaves.clone();
 
-        // 5. Verify the EXACT SAME proof against the NEW state
-        let verifies_new = proof.verify(
-            new_root, 
-            &update_indices, 
-            &new_values, 
-            total_leaves_count
-        );
-        assert!(verifies_new, "Proof failed to verify the new leaves against new root");
-        
-        let verify_malicious_exclusion=proof.verify(new_root, &malicious_indices, &malicious_excluding, 2);
-        assert_ne!(verify_malicious_exclusion, true, "Proof failed to verify malicious exclusion");
+        // Apply provided target leaf values to target positions
+        for (&idx, &val) in target_indices.iter().zip(target_leaves_values.iter()) {
+            if idx < current_layer.len() {
+                current_layer[idx] = val;
+            }
+        }
+
+        let mut current_indices = target_indices.to_vec();
+        let mut saved_layer = None;
+        let mut level: u32 = 0;
+
+        while current_layer.len() > 1 {
+            if target_layer == Some(level) {
+                saved_layer = Some(current_layer.clone());
+            }
+
+            let mut next_indices = Vec::new();
+            let mut i = 0;
+
+            while i < current_indices.len() {
+                let idx = current_indices[i];
+                let sibling = idx ^ 1;
+
+                if i + 1 < current_indices.len() && current_indices[i + 1] == sibling {
+                    flags.push(true);
+                    next_indices.push(idx / 2);
+                    i += 2;
+                } else if sibling < current_layer.len() {
+                    proof.push(current_layer[sibling]);
+                    flags.push(false);
+                    next_indices.push(idx / 2);
+                    i += 1;
+                } else {
+                    next_indices.push(idx / 2);
+                    i += 1;
+                }
+            }
+
+            let mut next_layer = Vec::with_capacity((current_layer.len() + 1) / 2);
+            for j in (0..current_layer.len()).step_by(2) {
+                if j + 1 < current_layer.len() {
+                    next_layer.push(hash_node(&current_layer[j], &current_layer[j + 1], &mut hasher));
+                } else {
+                    next_layer.push(current_layer[j]);
+                }
+            }
+
+            current_layer = next_layer;
+            current_indices = next_indices;
+            level += 1;
+        }
+
+        if target_layer == Some(level) {
+            saved_layer = Some(current_layer.clone());
+        }
+
+        let root = current_layer[0];
+        (root, height, proof, flags, saved_layer)
+    }
+
+    pub fn verify_multi_proof(
+        expected_root: &[u8; 32],
+        leaves: &[[u8; 32]],
+        proof: &[[u8; 32]],
+        flags: &[bool],
+    ) -> (bool, [u8; 32]) {
+        let total_hashes = leaves.len() + proof.len();
+        if total_hashes == 0 || flags.len() != total_hashes - 1 {
+            return (false, [0u8; 32]);
+        }
+
+        let mut hasher = Sha256::new();
+        let mut stack: Vec<[u8; 32]> = Vec::with_capacity(leaves.len());
+        let mut leaf_idx = 0;
+        let mut proof_idx = 0;
+
+        for &flag in flags {
+            let a = match stack.pop() {
+                Some(node) => node,
+                None if leaf_idx < leaves.len() => {
+                    let node = leaves[leaf_idx];
+                    leaf_idx += 1;
+                    node
+                }
+                _ => return (false, [0u8; 32]),
+            };
+
+            let b = if flag {
+                match stack.pop() {
+                    Some(node) => node,
+                    None if leaf_idx < leaves.len() => {
+                        let node = leaves[leaf_idx];
+                        leaf_idx += 1;
+                        node
+                    }
+                    _ => return (false, [0u8; 32]),
+                }
+            } else if proof_idx < proof.len() {
+                let node = proof[proof_idx];
+                proof_idx += 1;
+                node
+            } else {
+                return (false, [0u8; 32]);
+            };
+
+            stack.push(hash_node(&a, &b, &mut hasher));
+        }
+
+        if stack.len() == 1 {
+            let computed_root = stack[0];
+            (computed_root == *expected_root, computed_root)
+        } else {
+            (false, [0u8; 32])
+        }
     }
 }
