@@ -2,6 +2,10 @@ use sha2::{Digest, Sha256};
 
 #[inline(always)]
 fn hash_node(a: &[u8; 32], b: &[u8; 32], hasher: &mut Sha256) -> [u8; 32] {
+    let zero = [0u8; 32];
+    if a == &zero && b == &zero {
+        return zero;
+    }
     let (left, right) = if a > b { (b, a) } else { (a, b) };
     hasher.update(left);
     hasher.update(right);
@@ -17,175 +21,181 @@ impl MerkleTree {
         Self { leaves }
     }
 
-    pub fn height(&self) -> u32 {
-        let mut num_leaves = self.leaves.len();
-        if num_leaves == 0 {
-            return 0;
-        }
-        let mut height = 1;
-        while num_leaves > 1 {
-            num_leaves = (num_leaves + 1) / 2;
-            height += 1;
-        }
-        height
-    }
-
     pub fn root(&self) -> [u8; 32] {
-        if self.leaves.is_empty() {
-            return [0u8; 32];
-        }
-
+        if self.leaves.is_empty() { return [0u8; 32]; }
         let mut hasher = Sha256::new();
         let mut current_layer = self.leaves.clone();
+        let next_pow2 = current_layer.len().next_power_of_two();
+        current_layer.resize(next_pow2, [0u8; 32]);
 
         while current_layer.len() > 1 {
-            let mut next_layer = Vec::with_capacity((current_layer.len() + 1) / 2);
+            let mut next_layer = Vec::with_capacity(current_layer.len() / 2);
             for i in (0..current_layer.len()).step_by(2) {
-                if i + 1 < current_layer.len() {
-                    next_layer.push(hash_node(&current_layer[i], &current_layer[i + 1], &mut hasher));
-                } else {
-                    next_layer.push(current_layer[i]);
-                }
+                next_layer.push(hash_node(&current_layer[i], &current_layer[i + 1], &mut hasher));
             }
             current_layer = next_layer;
         }
-
         current_layer[0]
     }
 
-    /// Takes target indices and target leaf values. Applies the target values to a copy
-    /// of the tree's stored leaves, constructs the tree layer-by-layer, and returns
-    /// the calculated root alongside the proof.
     pub fn build_multi_proof(
         &self,
         target_indices: &[usize],
         target_leaves_values: &[[u8; 32]],
-        target_layer: Option<u32>,
-    ) -> ([u8; 32], u32, Vec<[u8; 32]>, Vec<bool>, Option<Vec<[u8; 32]>>) {
-        if self.leaves.is_empty() {
-            return ([0u8; 32], 0, vec![], vec![], None);
+    ) -> ([u8; 32], [u8; 32], u32, Vec<[u8; 32]>, Vec<bool>) {
+        assert!(!self.leaves.is_empty(), "Tree must have at least one leaf");
+        assert_eq!(target_indices.len(), target_leaves_values.len());
+        assert!(target_indices.windows(2).all(|w| w[0] < w[1]));
+
+        let mut hasher = Sha256::new();
+        let mut current_nodes = self.leaves.clone();
+        let mut new_nodes = self.leaves.clone();
+
+        for (&idx, &val) in target_indices.iter().zip(target_leaves_values.iter()) {
+            if idx < new_nodes.len() {
+                new_nodes[idx] = val;
+            }
         }
 
-        let height = self.height();
-        let mut hasher = Sha256::new();
+        let next_pow2 = current_nodes.len().next_power_of_two();
+        current_nodes.resize(next_pow2, [0u8; 32]);
+        new_nodes.resize(next_pow2, [0u8; 32]);
+
+        let height = next_pow2.trailing_zeros();
+
+        if current_nodes.len() == 1 {
+            return (current_nodes[0], new_nodes[0], height, vec![], vec![]);
+        }
+
+        let mut current_targets = target_indices.to_vec();
         let mut proof = Vec::new();
         let mut flags = Vec::new();
 
-        let mut current_layer = self.leaves.clone();
-
-        // Apply provided target leaf values to target positions
-        for (&idx, &val) in target_indices.iter().zip(target_leaves_values.iter()) {
-            if idx < current_layer.len() {
-                current_layer[idx] = val;
-            }
-        }
-
-        let mut current_indices = target_indices.to_vec();
-        let mut saved_layer = None;
-        let mut level: u32 = 0;
-
-        while current_layer.len() > 1 {
-            if target_layer == Some(level) {
-                saved_layer = Some(current_layer.clone());
-            }
-
-            let mut next_indices = Vec::new();
+        while current_nodes.len() > 1 {
+            let mut next_current = Vec::with_capacity(current_nodes.len() / 2);
+            let mut next_new = Vec::with_capacity(new_nodes.len() / 2);
+            let mut next_targets = Vec::new();
+            let mut target_pos = 0;
             let mut i = 0;
 
-            while i < current_indices.len() {
-                let idx = current_indices[i];
-                let sibling = idx ^ 1;
+            while i < current_nodes.len() {
+                let left_curr = current_nodes[i];
+                let right_curr = current_nodes[i + 1];
+                let left_new = new_nodes[i];
+                let right_new = new_nodes[i + 1];
 
-                if i + 1 < current_indices.len() && current_indices[i + 1] == sibling {
-                    flags.push(true);
-                    next_indices.push(idx / 2);
-                    i += 2;
-                } else if sibling < current_layer.len() {
-                    proof.push(current_layer[sibling]);
-                    flags.push(false);
-                    next_indices.push(idx / 2);
-                    i += 1;
-                } else {
-                    next_indices.push(idx / 2);
-                    i += 1;
+                let left_is_target = target_pos < current_targets.len() && current_targets[target_pos] == i;
+                if left_is_target { target_pos += 1; }
+
+                let right_is_target = target_pos < current_targets.len() && current_targets[target_pos] == i + 1;
+                if right_is_target { target_pos += 1; }
+
+                match (left_is_target, right_is_target) {
+                    (true, true) => {
+                        flags.push(true);
+                        next_targets.push(i / 2);
+                    }
+                    (true, false) => {
+                        flags.push(false);
+                        proof.push(right_curr);
+                        next_targets.push(i / 2);
+                    }
+                    (false, true) => {
+                        flags.push(false);
+                        proof.push(left_curr);
+                        next_targets.push(i / 2);
+                    }
+                    (false, false) => {}
                 }
+
+                next_current.push(hash_node(&left_curr, &right_curr, &mut hasher));
+                next_new.push(hash_node(&left_new, &right_new, &mut hasher));
+                i += 2;
             }
 
-            let mut next_layer = Vec::with_capacity((current_layer.len() + 1) / 2);
-            for j in (0..current_layer.len()).step_by(2) {
-                if j + 1 < current_layer.len() {
-                    next_layer.push(hash_node(&current_layer[j], &current_layer[j + 1], &mut hasher));
-                } else {
-                    next_layer.push(current_layer[j]);
-                }
-            }
-
-            current_layer = next_layer;
-            current_indices = next_indices;
-            level += 1;
+            current_nodes = next_current;
+            new_nodes = next_new;
+            current_targets = next_targets;
         }
 
-        if target_layer == Some(level) {
-            saved_layer = Some(current_layer.clone());
-        }
-
-        let root = current_layer[0];
-        (root, height, proof, flags, saved_layer)
+        (current_nodes[0], new_nodes[0], height, proof, flags)
     }
 
     pub fn verify_multi_proof(
         expected_root: &[u8; 32],
-        leaves: &[[u8; 32]],
+        target_leaves: &[[u8; 32]],
         proof: &[[u8; 32]],
         flags: &[bool],
-    ) -> (bool, [u8; 32]) {
-        let total_hashes = leaves.len() + proof.len();
-        if total_hashes == 0 || flags.len() != total_hashes - 1 {
-            return (false, [0u8; 32]);
+        target_layer: Option<u32>,
+    ) -> (bool, [u8; 32], Option<Vec<[u8; 32]>>) {
+        if target_leaves.len() == 1 && proof.is_empty() && flags.is_empty() {
+            let valid = target_leaves[0] == *expected_root;
+            let layer = if target_layer == Some(0) { Some(vec![target_leaves[0]]) } else { None };
+            return (valid, target_leaves[0], layer);
+        }
+
+        if target_leaves.is_empty() {
+            return (false, [0u8; 32], None);
         }
 
         let mut hasher = Sha256::new();
-        let mut stack: Vec<[u8; 32]> = Vec::with_capacity(leaves.len());
-        let mut leaf_idx = 0;
-        let mut proof_idx = 0;
+        let mut hashes: Vec<([u8; 32], u32)> = Vec::with_capacity(flags.len());
+        let mut leaf_pos = 0;
+        let mut hash_pos = 0;
+        let mut proof_pos = 0;
+        let mut extracted_layer = Vec::new();
 
         for &flag in flags {
-            let a = match stack.pop() {
-                Some(node) => node,
-                None if leaf_idx < leaves.len() => {
-                    let node = leaves[leaf_idx];
-                    leaf_idx += 1;
-                    node
-                }
-                _ => return (false, [0u8; 32]),
-            };
-
-            let b = if flag {
-                match stack.pop() {
-                    Some(node) => node,
-                    None if leaf_idx < leaves.len() => {
-                        let node = leaves[leaf_idx];
-                        leaf_idx += 1;
-                        node
-                    }
-                    _ => return (false, [0u8; 32]),
-                }
-            } else if proof_idx < proof.len() {
-                let node = proof[proof_idx];
-                proof_idx += 1;
-                node
+            let a_item = if leaf_pos < target_leaves.len() {
+                leaf_pos += 1;
+                (target_leaves[leaf_pos - 1], 0)
+            } else if hash_pos < hashes.len() {
+                hash_pos += 1;
+                hashes[hash_pos - 1]
             } else {
-                return (false, [0u8; 32]);
+                return (false, [0u8; 32], None);
             };
 
-            stack.push(hash_node(&a, &b, &mut hasher));
+            let b_item = if flag {
+                if leaf_pos < target_leaves.len() {
+                    leaf_pos += 1;
+                    (target_leaves[leaf_pos - 1], 0)
+                } else if hash_pos < hashes.len() {
+                    hash_pos += 1;
+                    hashes[hash_pos - 1]
+                } else {
+                    return (false, [0u8; 32], None);
+                }
+            } else {
+                if proof_pos < proof.len() {
+                    proof_pos += 1;
+                    (proof[proof_pos - 1], a_item.1)
+                } else {
+                    return (false, [0u8; 32], None);
+                }
+            };
+
+            if target_layer == Some(a_item.1) {
+                extracted_layer.push(a_item.0);
+                extracted_layer.push(b_item.0);
+            }
+
+            let new_hash = hash_node(&a_item.0, &b_item.0, &mut hasher);
+            hashes.push((new_hash, a_item.1 + 1));
         }
 
-        if stack.len() == 1 {
-            let computed_root = stack[0];
-            (computed_root == *expected_root, computed_root)
-        } else {
-            (false, [0u8; 32])
+        if leaf_pos != target_leaves.len() || proof_pos != proof.len() {
+            return (false, [0u8; 32], None);
         }
+
+        let computed_root = hashes.last().unwrap().0;
+        let root_level = hashes.last().unwrap().1;
+
+        if target_layer == Some(root_level) {
+            extracted_layer.push(computed_root);
+        }
+
+        let layer_result = if target_layer.is_some() { Some(extracted_layer) } else { None };
+        (computed_root == *expected_root, computed_root, layer_result)
     }
 }
