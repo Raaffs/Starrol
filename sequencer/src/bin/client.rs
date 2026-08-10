@@ -1,7 +1,8 @@
-use k256::ecdsa::{SigningKey, Signature, signature::hazmat::PrehashSigner, VerifyingKey};
-use tonic::Request;
+use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
 use std::error::Error;
 use std::io::Read;
+use tokio::time::{sleep, Duration};
+use tonic::Request;
 
 pub mod sequencer {
     include!("../pb/sequencer.rs");
@@ -9,6 +10,8 @@ pub mod sequencer {
 
 use sequencer::root_anchoring_client::RootAnchoringClient;
 use sequencer::{RootSubmission, RootUpdate, SequencerStatus};
+
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 /// Read exactly `N` random bytes from /dev/urandom.
 fn random_bytes<const N: usize>() -> [u8; N] {
@@ -31,114 +34,205 @@ fn gen_keypair() -> (SigningKey, VerifyingKey) {
     }
 }
 
-/// Sign a 32-byte message hash and return DER-encoded signature bytes.
+/// Sign a 32-byte message hash and return the raw signature bytes.
 fn sign(signing_key: &SigningKey, msg: &[u8; 32]) -> Vec<u8> {
     let sig: Signature = signing_key.sign_prehash(msg).expect("sign_prehash failed");
     sig.to_vec()
 }
 
+fn sep(title: &str) {
+    println!("\n{}", "─".repeat(60));
+    println!("  {}", title);
+    println!("{}\n", "─".repeat(60));
+}
+
+// ── main ─────────────────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    println!("=== Sequencer insert-then-update test ===\n");
+    println!("=== Sequencer batch-submit + multi-update test ===\n");
 
-    let mut client = RootAnchoringClient::connect("http://127.0.0.1:50051").await?;
-    println!("Connected to sequencer at 127.0.0.1:50051\n");
+    let client = RootAnchoringClient::connect("http://127.0.0.1:50051").await?;
+    println!("Connected to sequencer at 127.0.0.1:50051");
 
-    // ── Step 1: generate 3 certificate roots and submit them in one batch ──────
+    // ── STEP 1: generate 5 issuers, each with their own key-pair and root ────
 
-    // We use 3 different key-pairs to simulate 3 issuers.
-    let (sk_a, vk_a) = gen_keypair();
-    let (sk_b, vk_b) = gen_keypair();
-    let (sk_c, vk_c) = gen_keypair();
+    sep("STEP 1 — submitting 5 roots concurrently");
 
-    let root_a: [u8; 32] = random_bytes();
-    let root_b: [u8; 32] = random_bytes();
-    let root_c: [u8; 32] = random_bytes();
+    // (signing_key, verifying_key, current_root)
+    let issuers: Vec<(SigningKey, VerifyingKey, [u8; 32])> = (0..5)
+        .map(|_| {
+            let (sk, vk) = gen_keypair();
+            let root = random_bytes::<32>();
+            (sk, vk, root)
+        })
+        .collect();
 
-    println!("--- Submitting 3 roots ---");
-    println!("  root_a: {}", hex::encode(root_a));
-    println!("  root_b: {}", hex::encode(root_b));
-    println!("  root_c: {}", hex::encode(root_c));
+    for (i, (_, _, root)) in issuers.iter().enumerate() {
+        println!("  issuer[{}] root: {}", i, hex::encode(root));
+    }
     println!();
 
-    let submissions: Vec<(Vec<u8>, &SigningKey, &VerifyingKey)> = vec![
-        (root_a.to_vec(), &sk_a, &vk_a),
-        (root_b.to_vec(), &sk_b, &vk_b),
-        (root_c.to_vec(), &sk_c, &vk_c),
-    ];
+    // Spawn concurrent tokio tasks for each submission without waiting for individual responses
+    let mut submit_handles = Vec::new();
 
-    // Fire all three submissions concurrently and collect their sequence numbers.
-    let mut seq_nos: Vec<(Vec<u8>, u64)> = Vec::new(); // (root, seq_no)
+    for (i, (sk, vk, root)) in issuers.iter().enumerate() {
+        let mut c = client.clone();
+        let sig = sign(sk, root);
+        let pub_key = vk.to_sec1_bytes().to_vec();
+        let root_vec = root.to_vec();
 
-    for (root_vec, sk, vk) in &submissions {
-        let root_arr: [u8; 32] = root_vec.as_slice().try_into().unwrap();
-        let sig_bytes = sign(sk, &root_arr);
-        let pub_key_bytes = vk.to_sec1_bytes().to_vec();
-
-        let req = Request::new(RootSubmission {
-            certificate_root: root_vec.clone(),
-            signature: sig_bytes,
-            public_key: pub_key_bytes,
+        let h = tokio::spawn(async move {
+            let resp = c
+                .submit_root(Request::new(RootSubmission {
+                    certificate_root: root_vec,
+                    signature: sig,
+                    public_key: pub_key,
+                }))
+                .await;
+            (i, resp)
         });
+        submit_handles.push(h);
+    }
 
-        let resp = client.submit_root(req).await?.into_inner();
-        let status = SequencerStatus::try_from(resp.status).unwrap_or(SequencerStatus::Unknown);
+    // Collect responses from all concurrent submissions
+    let mut seq_map: Vec<Option<u64>> = vec![None; issuers.len()];
 
-        println!(
-            "  submit_root({}) → status={:?}, seq_no={}",
-            hex::encode(root_vec),
-            status,
-            resp.sequence_number,
-        );
+    for h in submit_handles {
+        match h.await? {
+            (i, Ok(resp)) => {
+                let inner = resp.into_inner();
+                let status =
+                    SequencerStatus::try_from(inner.status).unwrap_or(SequencerStatus::Unknown);
 
-        if status == SequencerStatus::Accepted {
-            seq_nos.push((root_vec.clone(), resp.sequence_number));
-        } else {
-            eprintln!("    ERROR: {}", resp.error_details);
+                println!(
+                    "  submit[{}] → status={:?}  seq_no={}{}",
+                    i,
+                    status,
+                    inner.sequence_number,
+                    if inner.error_details.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  ERR: {}", inner.error_details)
+                    }
+                );
+
+                if status == SequencerStatus::Accepted {
+                    seq_map[i] = Some(inner.sequence_number);
+                }
+            }
+            (i, Err(e)) => {
+                eprintln!("  submit[{}] | gRPC error: {}", i, e);
+            }
         }
     }
 
-    if seq_nos.is_empty() {
-        eprintln!("\nNo submissions were accepted; cannot proceed with update.");
+    // Collect the successfully accepted issuers.
+    let accepted: Vec<(usize, u64)> = seq_map
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| s.map(|seq| (i, seq)))
+        .collect();
+
+    if accepted.is_empty() {
+        eprintln!("\nNo submissions accepted — aborting.");
         return Ok(());
     }
 
+    println!("\n  {} / 5 roots accepted.", accepted.len());
+
+    // ── STEP 2: wait briefly for the server to finish processing ─────────────
+
+    sep("STEP 2 — waiting 300 ms for the server to flush the batch");
+    sleep(Duration::from_millis(300)).await;
+    println!("  Done waiting.");
+
+    // ── STEP 3: send 4 simultaneous updates ──────────────────────────────────
+
+    sep("STEP 3 — sending up to 4 concurrent root updates");
+
+    // We'll update at most 4 of the accepted issuers.
+    let to_update: Vec<(usize, u64)> = accepted.into_iter().take(4).collect();
+
+    // Prepare (old_root, new_root, seq_no) for each update.
+    let mut update_specs: Vec<(usize, [u8; 32], [u8; 32], u64)> = to_update
+        .iter()
+        .map(|&(issuer_idx, seq_no)| {
+            let old_root = issuers[issuer_idx].2;
+            let new_root = random_bytes::<32>();
+            (issuer_idx, old_root, new_root, seq_no)
+        })
+        .collect();
+
+    for (idx, old, new, seq) in &update_specs {
+        println!(
+            "  issuer[{}] seq={} | old={} → new={}",
+            idx,
+            seq,
+            hex::encode(old),
+            hex::encode(new)
+        );
+    }
     println!();
 
-    // ── Step 2: update root_a to a freshly generated root_a_new ───────────────
+    // Clone a handle per update and fire them all concurrently.
+    let mut update_handles = Vec::new();
+    for (issuer_idx, old_root, new_root, seq_no) in update_specs.drain(..) {
+        let mut c = client.clone();
+        let (sk, vk, _) = &issuers[issuer_idx];
+        let sig = sign(sk, &new_root);
+        let pub_key = vk.to_sec1_bytes().to_vec();
 
-    let (old_root_vec, seq_no) = &seq_nos[0];
-    let old_root_arr: [u8; 32] = old_root_vec.as_slice().try_into().unwrap();
+        let h = tokio::spawn(async move {
+            let resp = c
+                .update_root(Request::new(RootUpdate {
+                    old_certificate_root: old_root.to_vec(),
+                    new_certificate_root: new_root.to_vec(),
+                    sequence_number: seq_no,
+                    signature: sig,
+                    public_key: pub_key,
+                }))
+                .await;
+            (issuer_idx, seq_no, old_root, new_root, resp)
+        });
+        update_handles.push(h);
+    }
 
-    let new_root_a: [u8; 32] = random_bytes();
+    sep("STEP 4 — collecting update responses");
 
-    // Re-use the same key-pair that originally signed root_a (sk_a / vk_a).
-    let sig_update = sign(&sk_a, &new_root_a);
-    let pub_key_update = vk_a.to_sec1_bytes().to_vec();
-
-    println!("--- Updating root_a (seq_no={}) ---", seq_no);
-    println!("  old root: {}", hex::encode(old_root_arr));
-    println!("  new root: {}", hex::encode(new_root_a));
-    println!();
-
-    let update_req = Request::new(RootUpdate {
-        old_certificate_root: old_root_vec.clone(),
-        new_certificate_root: new_root_a.to_vec(),
-        sequence_number: *seq_no,
-        signature: sig_update,
-        public_key: pub_key_update,
-    });
-
-    let update_resp = client.update_root(update_req).await?.into_inner();
-    let update_status =
-        SequencerStatus::try_from(update_resp.status).unwrap_or(SequencerStatus::Unknown);
-
-    println!(
-        "  update_root → status={:?}, seq_no={}",
-        update_status, update_resp.sequence_number
-    );
-    if !update_resp.error_details.is_empty() {
-        eprintln!("  error_details: {}", update_resp.error_details);
+    for h in update_handles {
+        match h.await? {
+            (issuer_idx, seq_no, old_root, new_root, Ok(resp)) => {
+                let inner = resp.into_inner();
+                let status =
+                    SequencerStatus::try_from(inner.status).unwrap_or(SequencerStatus::Unknown);
+                println!(
+                    "  issuer[{}] seq={} | update → status={:?}  returned_seq={}{}",
+                    issuer_idx,
+                    seq_no,
+                    status,
+                    inner.sequence_number,
+                    if inner.error_details.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  ERR: {}", inner.error_details)
+                    }
+                );
+                if status == SequencerStatus::Accepted {
+                    println!(
+                        "    old={} → new={}  ✓",
+                        hex::encode(old_root),
+                        hex::encode(new_root)
+                    );
+                }
+            }
+            (issuer_idx, seq_no, _, _, Err(e)) => {
+                eprintln!(
+                    "  issuer[{}] seq={} | gRPC error: {}",
+                    issuer_idx, seq_no, e
+                );
+            }
+        }
     }
 
     println!("\n=== Done ===");

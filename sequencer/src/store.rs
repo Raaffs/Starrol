@@ -17,8 +17,6 @@ pub trait Store: Send + Sync {
 
     async fn get_by_leaf(&self, leaf: [u8; 32]) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
 
-    async fn get_by_seq_numbers(&self, seq_numbers: Vec<u32>) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
-
     async fn get_latest_seq_number(&self) -> Result<u32, Box<dyn Error + Send + Sync>>;
 
     async fn get_leaves_by_seq_number(
@@ -26,9 +24,29 @@ pub trait Store: Send + Sync {
         seq_number: u32,
     ) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
 
+    async fn get_leaves_set_by_seq_number(
+        &self,
+        seq_numbers: &[u64],
+    ) -> Result<Vec<(u64, Vec<[u8; 32]>)>, Box<dyn Error + Send + Sync>>;
+
+    async fn get_root_by_seq_numbers(
+        &self,
+        seq_numbers: Vec<u64>,
+    ) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
+
     async fn update_root_by_seq_number(
         &self,
         seq_number: u32,
+        new_root: [u8; 32],
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+    /// Atomically replaces `old_leaves[i]` with `new_leaves[i]` in both the `leaves` table
+    /// and the `roots.leaves` array, then sets the new Merkle root for the given sequence number.
+    async fn update_leaves_and_root(
+        &self,
+        seq_number: u32,
+        old_leaves: &[[u8; 32]],
+        new_leaves: &[[u8; 32]],
         new_root: [u8; 32],
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
 }

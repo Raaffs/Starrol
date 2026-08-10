@@ -1,10 +1,10 @@
+use crate::internal::utils::utils;
 use crate::rpc::{SequencerServerImpl,SubmissionBatchItem,SubmissionPayload,UpdateBatchItem,UpdatePayload};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use crate::crypto::merkle::MerkleTree;
+use crate::crypto::merkle::{self, MerkleTree};
 use crate::store::{Store,DigitalSignatureService};
 use tokio::sync::{mpsc};
-
+use std::collections::HashMap;
 pub mod sequencer {
     tonic::include_proto!("sequencer");
 }
@@ -118,60 +118,110 @@ impl SequencerServerImpl{
         batch: &[UpdatePayload],
         store: &Arc<dyn Store + Send + Sync>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut seq_map: HashMap<u64, Vec<&UpdatePayload>> = HashMap::new();
+        let sequence_numbers = utils::unique_elements(
+            &batch.iter().map(|b| b.sequence_number).collect::<Vec<_>>(),
+        );
+
+        // Fetch current leaves for every affected sequence number from the DB.
+        let leaves_by_sequence = store.get_leaves_set_by_seq_number(&sequence_numbers).await?;
+
+        // Build a lookup: seq_number -> its current leaf list.
+        let seq_to_leaves: HashMap<u64, Vec<[u8; 32]>> =
+            leaves_by_sequence.into_iter().collect();
+
+        // Group the incoming payloads by sequence number so we can process each
+        // sub-tree independently and compute the correct per-seq new root.
+        let mut payloads_by_seq: HashMap<u64, Vec<&UpdatePayload>> = HashMap::new();
         for payload in batch {
-            seq_map.entry(payload.sequence_number).or_default().push(payload);
+            payloads_by_seq
+                .entry(payload.sequence_number)
+                .or_default()
+                .push(payload);
         }
 
-        for (seq_no, updates) in seq_map {
-            // get all roots=>leaves based on seqno
-            let leaves = store.get_leaves_by_seq_number(seq_no as u32).await?;
-            if leaves.is_empty() {
-                return Err(format!("No leaves found for sequence_number {}", seq_no).into());
-            }
-            let merkle = MerkleTree::new(leaves.clone());
+        // For each sequence number: identify which leaves change, recompute the
+        // sub-tree root, and persist everything in a single atomic transaction.
+        for seq_number in &sequence_numbers {
+            let current_leaves = seq_to_leaves
+                .get(seq_number)
+                .ok_or_else(|| format!("no leaves found for sequence number {}", seq_number))?;
 
-            // based on leaves, map indices of old leaves 
-            let mut pairs: Vec<(usize, [u8; 32], [u8; 32])> = Vec::new();
-            for update in updates {
-                let old_leaf: [u8; 32] = update
+            let updates = payloads_by_seq
+                .get(seq_number)
+                .ok_or_else(|| format!("no payloads for sequence number {}", seq_number))?;
+
+            // Build a lookup: old_leaf -> position in current_leaves.
+            let leaf_to_index: HashMap<[u8; 32], usize> = current_leaves
+                .iter()
+                .enumerate()
+                .map(|(i, leaf)| (*leaf, i))
+                .collect();
+
+            let mut old_leaves_vec: Vec<[u8; 32]> = Vec::with_capacity(updates.len());
+            let mut new_leaves_vec: Vec<[u8; 32]> = Vec::with_capacity(updates.len());
+            let mut target_indices: Vec<usize> = Vec::with_capacity(updates.len());
+
+            for payload in updates {
+                let old_leaf: [u8; 32] = payload
                     .old_root
-                    .as_slice()
+                    .clone()
                     .try_into()
-                    .map_err(|_| "old_root must be exactly 32 bytes")?;
-                    let new_leaf: [u8; 32] = update
+                    .map_err(|_| "old_root is not 32 bytes".to_string())?;
+
+                let new_leaf: [u8; 32] = payload
                     .new_root
-                    .as_slice()
+                    .clone()
                     .try_into()
-                    .map_err(|_| "new_root must be exactly 32 bytes")?;
+                    .map_err(|_| "new_root is not 32 bytes".to_string())?;
 
-                if let Some(idx) = leaves.iter().position(|l| l == &old_leaf) {
-                    pairs.push((idx, new_leaf, old_leaf));
-                } else {
-                    return Err(format!("Leaf {:?} not found in sequence_number {}", old_leaf, seq_no).into());
-                }
+                let idx = *leaf_to_index
+                    .get(&old_leaf)
+                    .ok_or_else(|| {
+                        format!(
+                            "old_root {:?} not found in leaves for seq {}",
+                            old_leaf, seq_number
+                        )
+                    })?;
+
+                old_leaves_vec.push(old_leaf);
+                new_leaves_vec.push(new_leaf);
+                target_indices.push(idx);
             }
 
-            pairs.sort_by_key(|(idx, _, _)| *idx);
-            pairs.dedup_by_key(|(idx, _, _)| *idx);
+            // Sort by index — build_multi_proof requires target_indices to be sorted.
+            let mut order: Vec<usize> = (0..target_indices.len()).collect();
+            order.sort_by_key(|&i| target_indices[i]);
 
-            if pairs.is_empty() {
-                continue;
-            }
+            let sorted_indices: Vec<usize> = order.iter().map(|&i| target_indices[i]).collect();
+            let sorted_old: Vec<[u8; 32]> = order.iter().map(|&i| old_leaves_vec[i]).collect();
+            let sorted_new: Vec<[u8; 32]> = order.iter().map(|&i| new_leaves_vec[i]).collect();
 
-            let target_indices: Vec<usize> = pairs.iter().map(|(i, _, _)| *i).collect();
-            let target_leaves_values: Vec<[u8; 32]> = pairs.iter().map(|(_, new_l, _)| *new_l).collect();
-
+            // Build the sub-tree for this sequence number and compute the new root.
+            let sub_tree = MerkleTree::new(current_leaves.clone());
             let (_old_root, new_root, _height, _proof, _flags) =
-                merkle.build_multi_proof(&target_indices, &target_leaves_values);
+                sub_tree.build_multi_proof(&sorted_indices, &sorted_old);
 
-            for (_idx, new_leaf, old_leaf) in pairs {
-                store
-                    .update_by_seq_number(seq_no as u32, old_leaf, new_leaf)
-                    .await?;
-            }
-            store.update_root_by_seq_number(seq_no as u32, new_root).await?;
+            tracing::debug!(
+                seq_number,
+                old_root = ?_old_root,
+                new_root = ?new_root,
+                "computed new merkle root for sequence number"
+            );
+
+            // Persist: replace old leaves with new leaves and update the root — all in one tx.
+            store
+                .update_leaves_and_root(*seq_number as u32, &sorted_old, &sorted_new, new_root)
+                .await
+                .map_err(|e| {
+                    tracing::error!(
+                        seq_number,
+                        error = ?e,
+                        "failed to persist leaf/root update"
+                    );
+                    e
+                })?;
         }
+
         Ok(())
     }
 
