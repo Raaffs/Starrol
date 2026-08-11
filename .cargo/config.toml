@@ -1,0 +1,3 @@
+[env]
+ROCKSDB_LIB_DIR = "/usr/lib64"
+ROCKSDB_SYS_USE_PKG_CONFIG = "1"

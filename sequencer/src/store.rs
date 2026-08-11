@@ -1,4 +1,5 @@
 pub mod postgres;
+pub mod rocks;
 use std::error::Error;
 
 use tonic::async_trait;
