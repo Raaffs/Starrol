@@ -1,5 +1,5 @@
 use sha2::{Digest, Sha256};
-
+use std::borrow::Borrow;
 #[inline(always)]
 fn hash_node(a: &[u8; 32], b: &[u8; 32], hasher: &mut Sha256) -> [u8; 32] {
     let zero = [0u8; 32];
@@ -38,22 +38,28 @@ impl MerkleTree {
         current_layer[0]
     }
 
-    pub fn build_multi_proof(
+    pub fn build_multi_proof<I,T>(
         &self,
         target_indices: &[usize],
-        target_leaves_values: &[[u8; 32]],
-    ) -> ([u8; 32], [u8; 32], u32, Vec<[u8; 32]>, Vec<bool>) {
+        target_leaves_values: I,
+    ) -> ([u8; 32], [u8; 32], u32, Vec<[u8; 32]>, Vec<bool>)
+    where
+        I: IntoIterator<Item = T>,
+        I::IntoIter: ExactSizeIterator,
+        T: Borrow<[u8; 32]>,
+    {
+        let target_leaves = target_leaves_values.into_iter();
         assert!(!self.leaves.is_empty(), "Tree must have at least one leaf");
-        assert_eq!(target_indices.len(), target_leaves_values.len());
+        assert_eq!(target_indices.len(), target_leaves.len());
         assert!(target_indices.windows(2).all(|w| w[0] < w[1]));
 
         let mut hasher = Sha256::new();
         let mut current_nodes = self.leaves.clone();
         let mut new_nodes = self.leaves.clone();
 
-        for (&idx, &val) in target_indices.iter().zip(target_leaves_values.iter()) {
+        for (&idx, val) in target_indices.iter().zip(target_leaves) {
             if idx < new_nodes.len() {
-                new_nodes[idx] = val;
+                new_nodes[idx] = *val.borrow();
             }
         }
 

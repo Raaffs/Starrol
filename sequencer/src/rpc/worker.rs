@@ -1,7 +1,7 @@
 use crate::internal::utils::utils;
 use crate::rpc::{SequencerServerImpl,SubmissionBatchItem,SubmissionPayload,UpdateBatchItem,UpdatePayload};
 use std::sync::{Arc, Mutex};
-use crate::crypto::merkle::{MerkleTree};
+use crate::crypto::merkle::{self, MerkleTree};
 use crate::store::{Store,DigitalSignatureService};
 use tokio::sync::{mpsc};
 use std::collections::HashMap;
@@ -123,9 +123,36 @@ impl SequencerServerImpl{
         );
 
         let leaves_set=store.get_leaves_set_by_seq_number(&sequence_numbers).await?;
-        
+
+        let mut updated_indices:Vec<usize>=Vec::with_capacity(batch.len());
+        let mut all_current_leaves: Vec<[u8; 32]> = leaves_set.iter().flat_map(|(_, l)| l.clone()).collect();
+
+        let merkle=merkle::MerkleTree::new(all_current_leaves.clone());
+
+        for global_index in 0..all_current_leaves.len() {
+            for b in batch {
+                if b.old_root == all_current_leaves[global_index] {
+                    if let Ok(new_root) = b.new_root.as_slice().try_into() {
+                        all_current_leaves[global_index] = new_root; 
+                        updated_indices.push(global_index.clone());
+                    }
+                }
+            }
+        }        
+
+        merkle.build_multi_proof(
+            &updated_indices,
+            batch.iter().map(|b| -> [u8; 32] {
+                b.new_root
+                    .as_slice()
+                    .try_into()
+                    .expect("leaf must be 32 bytes")
+            }),
+        );
         Ok(())
     }
 
 }
 
+        
+        
