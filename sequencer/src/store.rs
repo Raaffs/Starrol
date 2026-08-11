@@ -1,54 +1,36 @@
+use std::error::Error;
+use tonic::async_trait;
+
 pub mod postgres;
 pub mod rocks;
-use std::error::Error;
 
-use tonic::async_trait;
 #[async_trait]
 pub trait Store: Send + Sync {
-    async fn insert(&self, root: [u8; 32], leaves: Vec<[u8; 32]>) -> Result<u64, Box<dyn Error + Send + Sync>>;
-
-    async fn update_by_seq_number(
+    async fn insert(
         &self,
-        seq_number: u32,
-        old: [u8; 32],
-        new: [u8; 32],
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+        root: [u8; 32],
+        leaves: Vec<[u8; 32]>,
+    ) -> Result<u32, Box<dyn Error + Send + Sync>>;
 
-    async fn update_by_leaf(&self, old: [u8; 32], new: [u8; 32]) -> Result<(), Box<dyn Error + Send + Sync>>;
-
-    async fn get_by_leaf(&self, leaf: [u8; 32]) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
-
-    async fn get_latest_seq_number(&self) -> Result<u32, Box<dyn Error + Send + Sync>>;
-
-    async fn get_leaves_by_seq_number(
+    async fn get_by_leaf(
         &self,
-        seq_number: u32,
+        leaf: [u8; 32],
     ) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
-
-    async fn get_leaves_set_by_seq_number(
-        &self,
-        seq_numbers: &[u64],
-    ) -> Result<Vec<(u64, Vec<[u8; 32]>)>, Box<dyn Error + Send + Sync>>;
 
     async fn get_root_by_seq_numbers(
         &self,
-        seq_numbers: Vec<u64>,
+        seq_numbers: &[u32],
     ) -> Result<Vec<[u8; 32]>, Box<dyn Error + Send + Sync>>;
 
-    async fn update_root_by_seq_number(
+    /// Equivalent to: SELECT sequence_number, leaves FROM roots WHERE sequence_number = ANY($1)
+    async fn get_leaves_set_by_seq_number(
         &self,
-        seq_number: u32,
-        new_root: [u8; 32],
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+        seq_numbers: &[u32],
+    ) -> Result<Vec<(u32, Vec<[u8; 32]>)>, Box<dyn Error + Send + Sync>>;
 
-    /// Atomically replaces `old_leaves[i]` with `new_leaves[i]` in both the `leaves` table
-    /// and the `roots.leaves` array, then sets the new Merkle root for the given sequence number.
-    async fn update_leaves_and_root(
+    async fn update_leaves_by_indices(
         &self,
-        seq_number: u32,
-        old_leaves: &[[u8; 32]],
-        new_leaves: &[[u8; 32]],
-        new_root: [u8; 32],
+        updates: &[(u32, Vec<(usize, [u8; 32])>)],
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
