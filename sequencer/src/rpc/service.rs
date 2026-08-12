@@ -27,6 +27,7 @@ impl RootAnchoring for SequencerServerImpl {
                 }
         };  
 
+        let start_verify = std::time::Instant::now();
         let is_valid = match self.digital_signer.lock().unwrap().verify(&req.public_key, root_hash, &req.signature) {
             Ok(valid) => valid,
             Err(e) => {
@@ -38,6 +39,7 @@ impl RootAnchoring for SequencerServerImpl {
                 }));
             }
         };
+        println!("Signature verification took: {:?}", start_verify.elapsed());
         if !is_valid {
             tracing::error!("Invalid signature for certificate root submission");
             return Ok(Response::new(ProtoResponse {

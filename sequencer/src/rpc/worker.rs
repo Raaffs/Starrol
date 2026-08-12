@@ -21,7 +21,7 @@ impl SequencerServerImpl{
         let store_submit = Arc::clone(&store);
         tokio::spawn(async move{
             while let Some(batch_items) =  rx_submission_batches.recv().await {
-                
+                println!("fefef");
                 let payloads : Vec<SubmissionPayload> = batch_items
                 .iter()
                 .map(|item| item.payload.clone())
@@ -110,7 +110,7 @@ impl SequencerServerImpl{
         }
         
         let merkle = MerkleTree::new(leaves);
-
+        println!("fefefefefefe");
         Ok(merkle)
     }
 
@@ -118,6 +118,7 @@ impl SequencerServerImpl{
         batch: &[UpdatePayload],
         store: &Arc<dyn Store + Send + Sync>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let start_time = std::time::Instant::now();
         let sequence_numbers:Vec<u32> = utils::unique_elements(
             &batch.iter().map(|b| b.sequence_number as u32).collect::<Vec<_>>(),
         );
@@ -129,18 +130,34 @@ impl SequencerServerImpl{
 
         let merkle=merkle::MerkleTree::new(all_current_leaves.clone());
 
-        for global_index in 0..all_current_leaves.len() {
-            for b in batch {
-                if b.old_root == all_current_leaves[global_index] {
-                    if let Ok(new_root) = b.new_root.as_slice().try_into() {
-                        all_current_leaves[global_index] = new_root; 
-                        updated_indices.push(global_index.clone());
-                    }
+        // O(batch) — build lookup: old_root → new_root
+        let replacements: HashMap<[u8; 32], [u8; 32]> = batch
+            .iter()
+            .filter_map(|b| {
+                let old: [u8; 32] = b.old_root.as_slice().try_into().ok()?;
+                let new: [u8; 32] = b.new_root.as_slice().try_into().ok()?;
+                Some((old, new))
+            })
+            .collect();
+
+        let mut per_seqno_updates: HashMap<u32, Vec<(usize, [u8; 32])>> = HashMap::new();
+
+        // O(total_leaves) — single pass, O(1) lookup per leaf
+        let mut global_offset = 0usize;
+        for &(seq, ref leaves) in &leaves_set {
+            for (local_idx, leaf) in leaves.iter().enumerate() {
+                if let Some(&new_root) = replacements.get(leaf) {
+                    let global_index = global_offset + local_idx;
+                    all_current_leaves[global_index] = new_root;
+                    updated_indices.push(global_index);
+                    per_seqno_updates.entry(seq).or_default().push((local_idx, new_root));
                 }
             }
-        }        
+            global_offset += leaves.len();
+        }
 
-        merkle.build_multi_proof(
+
+        let (current_root,new_root,height,proof,flags)=merkle.build_multi_proof(
             &updated_indices,
             batch.iter().map(|b| -> [u8; 32] {
                 b.new_root
@@ -149,6 +166,14 @@ impl SequencerServerImpl{
                     .expect("leaf must be 32 bytes")
             }),
         );
+
+        // Write the updated leaves back to RocksDB, keyed by seqno
+        let db_updates: Vec<(u32, Vec<(usize, [u8; 32])>)> = per_seqno_updates.into_iter().collect();
+        if !db_updates.is_empty() {
+            store.update_leaves_by_indices(&db_updates).await?;
+        }
+        println!("process_update_batch completed in: {:?}", start_time.elapsed());
+        tracing::info!("process_update_batch completed in: {:?}", start_time.elapsed());
         Ok(())
     }
 

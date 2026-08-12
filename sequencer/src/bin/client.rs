@@ -50,17 +50,20 @@ fn sep(title: &str) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let start_total = std::time::Instant::now();
     println!("=== Sequencer batch-submit + multi-update test ===\n");
 
-    let client = RootAnchoringClient::connect("http://127.0.0.1:50051").await?;
-    println!("Connected to sequencer at 127.0.0.1:50051");
+    let client_connect_start = std::time::Instant::now();
+    let client = RootAnchoringClient::connect("http://[::1]:50051").await?;
+    println!("Connected to sequencer at [::1]:50051 (took: {:?})", client_connect_start.elapsed());
 
-    // ── STEP 1: generate 5 issuers, each with their own key-pair and root ────
+    // ── STEP 1: generate 20 issuers, each with their own key-pair and root ────
 
-    sep("STEP 1 — submitting 5 roots concurrently");
+    sep("STEP 1 — submitting 20 roots concurrently");
 
+    let gen_start = std::time::Instant::now();
     // (signing_key, verifying_key, current_root)
-    let issuers: Vec<(SigningKey, VerifyingKey, [u8; 32])> = (0..5)
+    let issuers: Vec<(SigningKey, VerifyingKey, [u8; 32])> = (0..20)
         .map(|_| {
             let (sk, vk) = gen_keypair();
             let root = random_bytes::<32>();
@@ -71,9 +74,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (i, (_, _, root)) in issuers.iter().enumerate() {
         println!("  issuer[{}] root: {}", i, hex::encode(root));
     }
-    println!();
+    println!("\nGenerating 20 keypairs took: {:?}", gen_start.elapsed());
 
     // Spawn concurrent tokio tasks for each submission without waiting for individual responses
+    let submit_send_start = std::time::Instant::now();
     let mut submit_handles = Vec::new();
 
     for (i, (sk, vk, root)) in issuers.iter().enumerate() {
@@ -94,8 +98,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
         submit_handles.push(h);
     }
+    println!("Signing and spawning 20 submissions took: {:?}", submit_send_start.elapsed());
 
     // Collect responses from all concurrent submissions
+    let submit_recv_start = std::time::Instant::now();
     let mut seq_map: Vec<Option<u64>> = vec![None; issuers.len()];
 
     for h in submit_handles {
@@ -126,6 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+    println!("Waiting for 20 submissions responses took: {:?}", submit_recv_start.elapsed());
 
     // Collect the successfully accepted issuers.
     let accepted: Vec<(usize, u64)> = seq_map
@@ -139,7 +146,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    println!("\n  {} / 5 roots accepted.", accepted.len());
+    println!("\n  {} / 20 roots accepted.", accepted.len());
 
     // ── STEP 2: wait briefly for the server to finish processing ─────────────
 
@@ -147,12 +154,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     sleep(Duration::from_millis(300)).await;
     println!("  Done waiting.");
 
-    // ── STEP 3: send 4 simultaneous updates ──────────────────────────────────
+    // ── STEP 3: send 10 simultaneous updates ──────────────────────────────────
 
-    sep("STEP 3 — sending up to 4 concurrent root updates");
+    sep("STEP 3 — sending up to 10 concurrent root updates");
 
-    // We'll update at most 4 of the accepted issuers.
-    let to_update: Vec<(usize, u64)> = accepted.into_iter().take(4).collect();
+    // We'll update at most 10 of the accepted issuers.
+    let to_update: Vec<(usize, u64)> = accepted.into_iter().take(10).collect();
 
     // Prepare (old_root, new_root, seq_no) for each update.
     let mut update_specs: Vec<(usize, [u8; 32], [u8; 32], u64)> = to_update
@@ -176,6 +183,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Clone a handle per update and fire them all concurrently.
+    let update_send_start = std::time::Instant::now();
     let mut update_handles = Vec::new();
     for (issuer_idx, old_root, new_root, seq_no) in update_specs.drain(..) {
         let mut c = client.clone();
@@ -197,9 +205,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
         update_handles.push(h);
     }
+    println!("Signing and spawning 10 updates took: {:?}", update_send_start.elapsed());
 
     sep("STEP 4 — collecting update responses");
 
+    let update_recv_start = std::time::Instant::now();
     for h in update_handles {
         match h.await? {
             (issuer_idx, seq_no, old_root, new_root, Ok(resp)) => {
@@ -234,7 +244,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+    println!("Waiting for 10 updates responses took: {:?}", update_recv_start.elapsed());
 
-    println!("\n=== Done ===");
+    println!("\n=== Done (total time: {:?}) ===", start_total.elapsed());
     Ok(())
 }

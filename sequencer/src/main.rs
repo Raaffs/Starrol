@@ -10,9 +10,8 @@ use crate::crypto::secp256k1::Secp256k1;
 use crate::rpc::SequencerServerImpl;
 // Import the generated gRPC server struct:
 use crate::rpc::sequencer::root_anchoring_server::RootAnchoringServer;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::{Arc, Mutex};
-use store::postgres::PostgresDB;
+use store::rocks::SequencerStore;
 use store::{Store,DigitalSignatureService};
 use tokio::sync::mpsc;
 use tracing::subscriber::set_global_default;
@@ -35,17 +34,11 @@ pub fn init_logging() -> WorkerGuard {
     guard 
 }
 
-async fn init_store() -> Arc<dyn Store + Send + Sync> {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:root@localhost:5432/starrol".to_string());
-    
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&database_url)
-        .await
-        .expect("Failed to connect to Postgres");
+fn init_store() -> Arc<dyn Store + Send + Sync> {
+    let db_path = std::env::var("ROCKSDB_PATH")
+        .unwrap_or_else(|_| "data/sequencer_db".to_string());
 
-    Arc::new(PostgresDB::new(pool))
+    Arc::new(SequencerStore::new(&db_path).expect("Failed to open RocksDB"))
 }
 
 #[tokio::main]
@@ -54,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let config = Config::load().expect("Failed to load config");
-    let store =  init_store().await;
+    let store = init_store();
 
     let (tx_submit, rx_submit) = mpsc::channel(1024);
     let (tx_submit_batches, rx_submit_batches) = mpsc::channel(64);

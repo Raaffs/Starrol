@@ -10,7 +10,12 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, Box<dyn Error>>{
-        let contents = fs::read_to_string("config.json")?;
+        let path = if fs::metadata("sequencer/config.json").is_ok() {
+            "sequencer/config.json"
+        } else {
+            "config.json"
+        };
+        let contents = fs::read_to_string(path)?;
         let config: Config = serde_json::from_str(&contents)?;
         Ok(config)
     }
