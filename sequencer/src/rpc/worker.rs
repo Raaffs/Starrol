@@ -119,18 +119,20 @@ impl SequencerServerImpl{
         store: &Arc<dyn Store + Send + Sync>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let start_time = std::time::Instant::now();
-        let sequence_numbers:Vec<u32> = utils::unique_elements(
+        let sequence_numbers: Vec<u32> = utils::unique_elements(
             &batch.iter().map(|b| b.sequence_number as u32).collect::<Vec<_>>(),
         );
 
-        let leaves_set=store.get_leaves_set_by_seq_number(&sequence_numbers).await?;
+        let leaves_set = store.get_leaves_set_by_seq_number(&sequence_numbers).await?;
 
-        let mut updated_indices:Vec<usize>=Vec::with_capacity(batch.len());
-        let mut all_current_leaves: Vec<[u8; 32]> = leaves_set.iter().flat_map(|(_, l)| l.clone()).collect();
+        let mut all_current_leaves: Vec<[u8; 32]> = leaves_set
+            .iter()
+            .flat_map(|(_, l)| l.clone())
+            .collect();
 
-        let merkle=merkle::MerkleTree::new(all_current_leaves.clone());
-
-        // O(batch) — build lookup: old_root → new_root
+        // 1. Instantiate OLD Merkle tree before any mutations
+        let old_merkle = merkle::MerkleTree::new(all_current_leaves.clone());
+        
         let replacements: HashMap<[u8; 32], [u8; 32]> = batch
             .iter()
             .filter_map(|b| {
@@ -140,44 +142,57 @@ impl SequencerServerImpl{
             })
             .collect();
 
+        let mut updated_indices: Vec<usize> = Vec::with_capacity(batch.len());
+        let mut old_leaves_to_proof: Vec<[u8; 32]> = Vec::with_capacity(batch.len());
+        let mut new_leaves_to_proof: Vec<[u8; 32]> = Vec::with_capacity(batch.len());
         let mut per_seqno_updates: HashMap<u32, Vec<(usize, [u8; 32])>> = HashMap::new();
 
-        // O(total_leaves) — single pass, O(1) lookup per leaf
+        // update all_current_leaves in-place & capture aligned proofs
         let mut global_offset = 0usize;
         for &(seq, ref leaves) in &leaves_set {
             for (local_idx, leaf) in leaves.iter().enumerate() {
                 if let Some(&new_root) = replacements.get(leaf) {
                     let global_index = global_offset + local_idx;
-                    all_current_leaves[global_index] = new_root;
+
                     updated_indices.push(global_index);
+                    old_leaves_to_proof.push(*leaf);
+                    new_leaves_to_proof.push(new_root);
+
+                    // Update in-place using global_index directly (O(1))
+                    all_current_leaves[global_index] = new_root;
                     per_seqno_updates.entry(seq).or_default().push((local_idx, new_root));
                 }
             }
             global_offset += leaves.len();
         }
 
-
-        let (current_root,new_root,height,proof,flags)=merkle.build_multi_proof(
+        // Old State Multi-Proof
+        let (old_root, old_root_v, old_height, old_proof, old_flags) = old_merkle.build_multi_proof(
             &updated_indices,
-            batch.iter().map(|b| -> [u8; 32] {
-                b.new_root
-                    .as_slice()
-                    .try_into()
-                    .expect("leaf must be 32 bytes")
-            }),
+            &old_leaves_to_proof,
         );
 
-        // Write the updated leaves back to RocksDB, keyed by seqno
+        // let (valid, old_root_r, _) = MerkleTree::verify_multi_proof(&old_root_v, &old_leaves_to_proof, &old_proof, &old_flags, None);
+
+        // println!("old_root_r : {}\nmerkle old root: {}",hex::encode(old_root_r,),hex::encode(old_merkle.root()));
+
+        //New state Multi-proof
+        let new_merkle = merkle::MerkleTree::new(all_current_leaves);
+
+        let (new_root, _, new_height, new_proof, new_flags) = new_merkle.build_multi_proof(
+            &updated_indices,
+            new_leaves_to_proof.into_iter(),
+        );
+
+        // 5. DB Write-back
         let db_updates: Vec<(u32, Vec<(usize, [u8; 32])>)> = per_seqno_updates.into_iter().collect();
         if !db_updates.is_empty() {
             store.update_leaves_by_indices(&db_updates).await?;
         }
+
         println!("process_update_batch completed in: {:?}", start_time.elapsed());
         tracing::info!("process_update_batch completed in: {:?}", start_time.elapsed());
         Ok(())
     }
-
+    
 }
-
-        
-        

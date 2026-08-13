@@ -1,5 +1,12 @@
 {
-    "rust-analyzer.linkedProjects": [
-        "${workspaceFolder}/sequencer/Cargo.toml"
-    ],
+  "rust-analyzer.linkedProjects": [
+    "${workspaceFolder}/Cargo.toml",
+    "${workspaceFolder}/provers/Cargo.toml",
+    "${workspaceFolder}/provers/host/Cargo.toml",
+    "${workspaceFolder}/provers/methods/Cargo.toml",
+    "${workspaceFolder}/provers/methods/guest/Cargo.toml"
+  ],
+  "rust-analyzer.cargo.extraEnv": {
+    "RISC0_SKIP_BUILD": "1"
+  }
 }

@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // ── STEP 2: wait briefly for the server to finish processing ─────────────
 
     sep("STEP 2 — waiting 300 ms for the server to flush the batch");
-    sleep(Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(100)).await;
     println!("  Done waiting.");
 
     // ── STEP 3: send 10 simultaneous updates ──────────────────────────────────
