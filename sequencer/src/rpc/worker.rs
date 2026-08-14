@@ -130,7 +130,7 @@ impl SequencerServerImpl{
             .flat_map(|(_, l)| l.clone())
             .collect();
 
-        // 1. Instantiate OLD Merkle tree before any mutations
+        //  Instantiate OLD Merkle tree before any mutations
         let old_merkle = merkle::MerkleTree::new(all_current_leaves.clone());
         
         let replacements: HashMap<[u8; 32], [u8; 32]> = batch
@@ -184,7 +184,7 @@ impl SequencerServerImpl{
             new_leaves_to_proof.into_iter(),
         );
 
-        // 5. DB Write-back
+        // DB Write-back
         let db_updates: Vec<(u32, Vec<(usize, [u8; 32])>)> = per_seqno_updates.into_iter().collect();
         if !db_updates.is_empty() {
             store.update_leaves_by_indices(&db_updates).await?;
