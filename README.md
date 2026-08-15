@@ -85,6 +85,36 @@ To keep zkVM execution costs low during state updates and revocations, the syste
  ### 2. System Flow
 <img width="1096" height="960" alt="Gemini_Generated_Image_r0chxdr0chxdr0ch" src="https://github.com/user-attachments/assets/b182a328-52a8-472e-9d90-ff4b4541ccc3" />
 
+---
+
+## RoadMap
+###  Current Status
+- [x] **Sequencer Core**: RPC pipeline implemented to batch $N$ issuer requests into unified state transitions.
+- [x] **Merkle Engine & Layer Extraction**: Custom tree built with multi-proof generation and inner-layer extraction mechanics ready.
+- [x] **Optimized State Prover**: zkVM prover running with low-cycle zerocopy host-guest I/O (`bytemuck` zero-cost deserialization) for fast root updating and verification.
+
+### 📋 Remaining Milestones
+
+### Phase 1: Prover Core & Layer Extraction
+- [ ] **zkVM Layer Extraction Integration**: Integrate intermediate layer extraction into the zkVM circuit to aggregate subtree root updates ($g_1 \dots g_n$) into a single proof.
+- [ ] **Prover Unit Tests**: Add test coverage for mock batch updates, single-subtree updates, and edge-case boundary proofs.
+
+### Phase 2: On-Chain Smart Contracts (Ethereum L1)
+- [ ] **Issuer Registry Contract**: Smart contract to register, manage, and revoke public keys of authorized credential issuers.
+- [ ] **ZK Verifier & Blob Handler Contract**:
+  - Implement on-chain ZK-Validity Proof verification logic.
+  - Implement EIP-4844 blob verification using KZG commitments (`Commit-to-Blob`).
+  - Handle global state root updates upon successful proof verification.
+
+### Phase 3: Sequencer, Prover & L1 Integration
+- [ ] **Pipeline Coupling**: Connect Sequencer batch output to trigger automated Prover execution and Blob formatting.
+- [ ] **EIP-4844 Tx Construction**: Implement Type-3 transaction wrapper to submit blobs and ZK proofs directly to Ethereum L1.
+- [ ] **Integration Tests**: End-to-end testing from RPC ingestion through proof generation to L1 contract finalization.
+
+### Phase 4: Light Client Subtree Delivery & L2 Sync
+- [ ] **Attestation & Subtree API**: Enable light-client holders to fetch specific 16k subtree slices ($g_x$) from L2/storage nodes.
+- [ ] **End-to-End Verification Flow**: Full system validation (Issuer sign $\rightarrow$ Sequencer batch $\rightarrow$ ZK-Validity proof on-chain $\rightarrow$ Holder light client zero-knowledge proof verification).
+
 <!-- CONTRIBUTING -->
 ## Contributing
 
