@@ -49,10 +49,12 @@ Starrol is a post-quantum, privacy-preserving credential verification framework 
 
 [![Go][Go]][Go-url]
 [![rust][rust]][rust-url]
-[![risc0][risc0]][risc0-url]
+[![risc Zero][risc0]][risc0-url]
 [![Ethereum][Ethereum]][Ethereum-url]
+[![RocksDB][RocksDB]][rocks-url]
 [![React][React.js]][React-url]
 [![wails][wails]][wails-url]
+
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -115,3 +117,5 @@ Thank You!
 [risc0-url]: https://risczero.com/
 [rust]: https://img.shields.io/badge/Rust-E57324?style=for-the-badge&logo=rust&logoColor=white
 [rust-url]: https://rust-lang.org/
+[RocksDB]: https://img.shields.io/badge/RocksDB-00599C?style=for-the-badge&logo=rocksdb&logoColor=white
+[rocks-url]: https://rocksdb.org/
