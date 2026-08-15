@@ -3,12 +3,8 @@ use common::InsertItem;
 use risc0_zkvm::guest::env;
 use bytemuck;
 use k256::{
-    EncodedPoint, ecdsa::
-    {
-        Signature, SigningKey, VerifyingKey, 
-        signature::hazmat::{
-            PrehashSigner,PrehashVerifier
-        }
+    EncodedPoint, ecdsa::{
+        Signature, VerifyingKey, signature::{Verifier, hazmat::PrehashVerifier}
     }, 
 };
 use risc0_zkvm::sha::{Digest, Impl, Sha256};
@@ -38,10 +34,9 @@ fn main(){
         ).unwrap();
 
         let signature = Signature::from_slice(&item.signature).unwrap();
+        assert!(vk.verify_prehash(&item.credential_root, &signature).is_ok());
 
-        assert!(vk.verify_prehash(&item.root, &signature).is_ok());
-
-        roots.push(item.root);
+        roots.push(item.credential_root);
     }
 
     let final_merkle_root = compute_merkle_root(&roots);
