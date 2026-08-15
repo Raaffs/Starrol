@@ -104,7 +104,6 @@ To keep zkVM execution costs low during state updates and revocations, the syste
 - [ ] **ZK Verifier & Blob Handler Contract**:
   - Implement on-chain ZK-Validity Proof verification logic.
   - Implement EIP-4844 blob verification using KZG commitments (`Commit-to-Blob`).
-  - Handle global state root updates upon successful proof verification.
 
 ### Phase 3: Sequencer, Prover & L1 Integration
 - [ ] **Pipeline Coupling**: Connect Sequencer batch output to trigger automated Prover execution and Blob formatting.
